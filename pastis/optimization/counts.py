@@ -15,6 +15,8 @@ from .multiscale_optimization import decrease_lengths_res
 from .multiscale_optimization import decrease_counts_res
 from .multiscale_optimization import _count_fullres_per_lowres_bead
 
+from .correct_type import find_type_max
+
 
 def ambiguate_counts(counts, lengths, ploidy, exclude_zeros=False):
     """Convert diploid counts to ambiguous & aggregate counts across matrices.
@@ -34,6 +36,8 @@ def ambiguate_counts(counts, lengths, ploidy, exclude_zeros=False):
     -------
     coo_matrix or ndarray
         Aggregated and ambiguated contact counts matrix.
+    ndarray
+        Boolean mask of same shape as contact counts matrix
     """
 
     lengths = np.array(lengths)
@@ -53,7 +57,8 @@ def ambiguate_counts(counts, lengths, ploidy, exclude_zeros=False):
             if not isinstance(c, np.ndarray):
                 c = c.toarray()
             c = _check_counts_matrix(
-                c, lengths=lengths, ploidy=ploidy, exclude_zeros=True).toarray()
+                c, lengths=lengths, ploidy=ploidy,
+                exclude_zeros=True)[0].toarray()
             if c.shape[0] > c.shape[1]:
                 c_ambig = np.nansum(
                     [c[:n, :], c[n:, :], c[:n, :].T, c[n:, :].T], axis=0)
@@ -78,8 +83,8 @@ def _create_dummy_counts(counts, lengths, ploidy):
 
     rows, cols = _constraint_dis_indices(
         counts, n=lengths.sum(), lengths=lengths, ploidy=ploidy)
-    dummy_counts = sparse.coo_matrix((np.ones_like(rows), (rows, cols)), shape=(
-        lengths.sum() * ploidy, lengths.sum() * ploidy)).toarray()
+    dummy_counts = sparse.coo_matrix((np.ones_like(rows), (rows, cols)),
+        shape=(lengths.sum() * ploidy, lengths.sum() * ploidy)).toarray()
     dummy_counts = sparse.coo_matrix(np.triu(dummy_counts + dummy_counts.T, 1))
 
     return dummy_counts
@@ -164,7 +169,7 @@ def subset_chrom(ploidy, lengths_full, chrom_full, chrom_subset=None,
         chrom_subset = chrom_full.copy()
         lengths_subset = lengths_full.copy()
         if counts is not None:
-            counts = check_counts(
+            counts, masks = check_counts(
                 counts, lengths=lengths_full, ploidy=ploidy,
                 exclude_zeros=exclude_zeros)
         return lengths_subset, chrom_subset, counts, struct_true
@@ -176,7 +181,7 @@ def subset_chrom(ploidy, lengths_full, chrom_full, chrom_subset=None,
             struct_true = struct_true[index]
 
         if counts is not None:
-            counts = check_counts(
+            counts, masks = check_counts(
                 counts, lengths=lengths_full, ploidy=ploidy,
                 exclude_zeros=exclude_zeros, chrom_subset_index=index)
 
@@ -209,12 +214,11 @@ def _check_counts_matrix(counts, lengths, ploidy, exclude_zeros=False,
                          % (counts.shape[0], counts.shape[1],
                              ",".join(map(str, lengths))))
 
+    counts_mask = np.ones([counts.shape[0], counts.shape[1]], dtype=bool)
     empty_val = 0
     torm = np.full((max(counts.shape)), False)
     if not exclude_zeros:
-        empty_val = np.nan
         torm = find_beads_to_remove(counts, max(counts.shape))
-        counts = counts.astype(float)
 
     if sparse.issparse(counts) or isinstance(counts, CountsMatrix):
         counts = counts.toarray()
@@ -226,41 +230,64 @@ def _check_counts_matrix(counts, lengths, ploidy, exclude_zeros=False,
         warn("Counts matrix must only contain integers or NaN")
 
     if counts.shape[0] == counts.shape[1]:
-        counts[np.tril_indices(counts.shape[0])] = empty_val
+        counts = np.triu(counts, 1)
         counts[torm, :] = empty_val
         counts[:, torm] = empty_val
+        counts_mask = np.triu(counts_mask, 1).astype(bool)
+        counts_mask[torm, :] = False
+        counts_mask[:, torm] = False
         if chrom_subset_index is not None:
+            print('chrom subset')
             counts = counts[chrom_subset_index[:counts.shape[0]], :][
                 :, chrom_subset_index[:counts.shape[1]]]
+            counts_mask = counts_mask[chrom_subset_index[:counts_mask.shape[0]], :][
+                :, chrom_subset_index[:counts_mask.shape[1]]]
     elif min(counts.shape) * 2 == max(counts.shape):
         homo1 = counts[:min(counts.shape), :min(counts.shape)]
         homo2 = counts[counts.shape[0] -
                        min(counts.shape):, counts.shape[1] - min(counts.shape):]
+        mask1 = counts_mask[:min(counts_mask.shape), :min(counts_mask.shape)]
+        mask2 = counts_mask[counts_mask.shape[0] -
+                            min(counts_mask.shape):, counts_mask.shape[1] - min(counts_mask.shape):]
         if counts.shape[0] == min(counts.shape):
             homo1 = homo1.T
             homo2 = homo2.T
+            mask1 = mask1.T
+            mask2 = mask2.T
         np.fill_diagonal(homo1, empty_val)
         np.fill_diagonal(homo2, empty_val)
+        np.fill_diagonal(mask1, False)
+        np.fill_diagonal(mask2, False)
         homo1[:, torm[:min(counts.shape)] | torm[
             min(counts.shape):]] = empty_val
         homo2[:, torm[:min(counts.shape)] | torm[
             min(counts.shape):]] = empty_val
+        mask1[:, torm[:min(counts_mask.shape)] | torm[
+            min(counts_mask.shape):]] = False
+        mask2[:, torm[:min(counts_mask.shape)] | torm[
+            min(counts_mask.shape):]] = False
         # axis=0 is vertical concat
         counts = np.concatenate([homo1, homo2], axis=0)
+        counts_mask = np.concatenate([mask1, mask2], axis=0)
         counts[torm, :] = empty_val
+        counts_mask[torm, :] = False
         if chrom_subset_index is not None:
             counts = counts[chrom_subset_index[:counts.shape[0]], :][
                 :, chrom_subset_index[:counts.shape[1]]]
+            counts_mask = counts_mask[chrom_subset_index[:counts_mask.shape[0]], :][
+                :, chrom_subset_index[:counts_mask.shape[1]]]
     else:
         raise ValueError("Input counts matrix is - %d by %d. Counts must be"
                          " n-by-n or n-by-2n or 2n-by-2n." %
                          (counts.shape[0], counts.shape[1]))
 
     if exclude_zeros:
+        counts_mask = np.ones([counts.shape[0], counts.shape[1]], dtype=bool)
+        #counts_mask = np.zeros([counts.shape[0], counts.shape[1]], dtype=bool)
         counts[np.isnan(counts)] = 0
         counts = sparse.coo_matrix(counts)
 
-    return counts
+    return counts, counts_mask
 
 
 def check_counts(counts, lengths, ploidy, exclude_zeros=False,
@@ -280,16 +307,24 @@ def check_counts(counts, lengths, ploidy, exclude_zeros=False,
 
     Returns
     -------
-    counts : list of array or coo_matrix
+    the_counts : list of array or coo_matrix
         Checked and reformatted counts data.
+    the_masks : list of boolean arrays
+        Boolean masks of same shape as counts data
     """
 
     lengths = np.array(lengths)
     if not isinstance(counts, list):
         counts = [counts]
-    return [_check_counts_matrix(
-        c, lengths=lengths, ploidy=ploidy, exclude_zeros=exclude_zeros,
-        chrom_subset_index=chrom_subset_index) for c in counts]
+    the_counts = []
+    the_masks = []
+    for c in counts:
+        curr_counts, curr_mask = _check_counts_matrix(
+            c, lengths=lengths, ploidy=ploidy, exclude_zeros=exclude_zeros,
+            chrom_subset_index=chrom_subset_index)
+        the_counts.append(curr_counts)
+        the_masks.append(curr_mask)
+    return the_counts, the_masks
 
 
 def preprocess_counts(counts_raw, lengths, ploidy, multiscale_factor, normalize,
@@ -340,7 +375,7 @@ def preprocess_counts(counts_raw, lengths, ploidy, multiscale_factor, normalize,
         Beads that should be removed (set to NaN) in the structure.
     """
 
-    counts_prepped, bias = _prep_counts(
+    counts_prepped, bias, masks_prepped = _prep_counts(
         counts_raw, lengths=lengths, ploidy=ploidy,
         multiscale_factor=multiscale_factor, normalize=normalize,
         filter_threshold=filter_threshold, exclude_zeros=exclude_zeros,
@@ -352,11 +387,23 @@ def preprocess_counts(counts_raw, lengths, ploidy, multiscale_factor, normalize,
         if excluded_counts.lower() == 'intra':
             counts_prepped = [_inter_counts(
                 c, lengths=lengths_lowres, ploidy=ploidy,
-                exclude_zeros=exclude_zeros) for c in counts_prepped]
+                exclude_zeros=exclude_zeros)[0] for c in counts_prepped]
+            #the_counts = []
+            #the_masks = []
+            #for curr in counts_prepped:
+            #    the_counts.append(curr[0])
+            #    the_masks.append(curr[1])
+            #counts_prepped = the_counts
         elif excluded_counts.lower() == 'inter':
             counts_prepped = [_intra_counts(
                 c, lengths=lengths_lowres, ploidy=ploidy,
-                exclude_zeros=exclude_zeros) for c in counts_prepped]
+                exclude_zeros=exclude_zeros)[0] for c in counts_prepped]
+            #the_counts = []
+            #the_masks = []
+            #for curr in counts_prepped:
+            #    the_counts.append(curr[0])
+            #    the_masks.append(curr[1])
+            #counts_prepped = the_counts
         else:
             raise ValueError(
                 "`excluded_counts` must be 'inter', 'intra' or None.")
@@ -397,10 +444,13 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
         counts_list = [counts_list]
 
     # Copy counts
-    counts_list = [c.copy() for c in counts_list]
+    if type(counts_list[0]) == tuple:
+        counts_list = [c[0].copy() for c in counts_list]
+    else:
+        counts_list = [c.copy() for c in counts_list]
 
     # Check counts
-    counts_list = check_counts(
+    counts_list, mask_list = check_counts(
         counts_list, lengths=lengths, ploidy=ploidy, exclude_zeros=True)
 
     # Determine ambiguity
@@ -436,7 +486,7 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
         if verbose:
             print("FILTERING LOW COUNTS: manually filtering all counts together"
                   " by %g" % filter_threshold, flush=True)
-        all_counts_ambiguated = ambiguate_counts(
+        all_counts_ambiguated, all_masks_ambiguated = ambiguate_counts(
             list(counts_dict.values()), lengths=lengths_lowres, ploidy=ploidy,
             exclude_zeros=True)
         initial_zero_beads = find_beads_to_remove(
@@ -466,7 +516,7 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
                 print('FILTERING LOW COUNTS: manually filtering %s counts by %g'
                       % (counts_type.upper(), filter_threshold), flush=True)
             initial_zero_beads = find_beads_to_remove(
-                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy),
+                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy)[0],
                 lengths_lowres.sum()).sum()
             if counts_type == 'pa':
                 if sparse.issparse(counts):
@@ -491,10 +541,11 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
                 counts = counts_filtered
             else:
                 counts = filter_low_counts(
-                    sparse.coo_matrix(counts), sparsity=False,
-                    percentage=filter_threshold + _percent_nan_beads(counts)).tocoo()
+                    sparse.coo_matrix(counts.astype(float)), sparsity=False,
+                    percentage=filter_threshold + _percent_nan_beads(counts))
+                counts = counts.astype(find_type_max(counts)).tocoo()
             torm = find_beads_to_remove(
-                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy),
+                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy)[0],
                 lengths_lowres.sum())
             if verbose:
                 print('                      removing %d beads' %
@@ -511,12 +562,12 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
         bias = ICE_normalization(
             ambiguate_counts(
                 list(counts_dict.values()), lengths=lengths_lowres,
-                ploidy=ploidy, exclude_zeros=True),
+                ploidy=ploidy, exclude_zeros=True)[0],
             max_iter=300, output_bias=True)[1].flatten()
         # In each counts matrix, zero out counts for which bias is NaN
         for counts_type, counts in counts_dict.items():
             initial_zero_beads = find_beads_to_remove(
-                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy),
+                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy)[0],
                 lengths_lowres.sum()).sum()
             if sparse.issparse(counts):
                 counts = counts.toarray()
@@ -527,17 +578,18 @@ def _prep_counts(counts_list, lengths, ploidy=1, multiscale_factor=1,
             counts = sparse.coo_matrix(counts)
             counts_dict[counts_type] = counts
             torm = find_beads_to_remove(
-                ambiguate_counts(counts, lengths=lengths_lowres, ploidy=ploidy),
+                ambiguate_counts(counts, lengths=lengths_lowres,
+                                 ploidy=ploidy)[0],
                 lengths_lowres.sum())
             if verbose and torm.sum() - initial_zero_beads > 0:
                 print('                removing %d additional beads from %s' %
                       (torm.sum() - initial_zero_beads, counts_type),
                       flush=True)
 
-    output_counts = check_counts(
+    output_counts, output_masks = check_counts(
         list(counts_dict.values()), lengths=lengths_lowres, ploidy=ploidy,
         exclude_zeros=exclude_zeros)
-    return output_counts, bias
+    return output_counts, bias, output_masks
 
 
 def _format_counts(counts, lengths, ploidy, beta=None, input_weight=None,
@@ -549,7 +601,7 @@ def _format_counts(counts, lengths, ploidy, beta=None, input_weight=None,
     n = lengths_lowres.sum()
 
     # Check input
-    counts = check_counts(
+    counts, masks = check_counts(
         counts, lengths=lengths_lowres, ploidy=ploidy, exclude_zeros=exclude_zeros)
 
     if beta is not None:
@@ -566,7 +618,6 @@ def _format_counts(counts, lengths, ploidy, beta=None, input_weight=None,
         for counts_maps in counts:
             if exclude_zeros:
                 beta_maps = counts_maps.data.mean()
-
             else:
                 beta_maps = np.nanmean(counts_maps)
             if ploidy == 2:
@@ -601,16 +652,19 @@ def _format_counts(counts, lengths, ploidy, beta=None, input_weight=None,
 
     # Reformat counts as SparseCountsMatrix or ZeroCountsMatrix instance
     counts_reformatted = []
+    the_counter = 0
     for counts_maps, beta_maps, input_weight_maps, fullres_torm_maps in zip(counts, beta, input_weight, fullres_torm):
+        the_curr_mask = masks[the_counter]
         counts_reformatted.append(SparseCountsMatrix(
-            counts_maps, lengths=lengths, ploidy=ploidy,
+            counts_maps, the_curr_mask, lengths=lengths, ploidy=ploidy,
             multiscale_factor=multiscale_factor, beta=beta_maps,
             fullres_torm=fullres_torm_maps, weight=input_weight_maps))
-        if not exclude_zeros and (counts_maps == 0).sum() > 0:
+        if not exclude_zeros and (the_curr_mask & (counts_maps == 0)).sum() > 0:
             counts_reformatted.append(ZeroCountsMatrix(
-                counts_maps, lengths=lengths, ploidy=ploidy,
+                counts_maps, masks[the_counter], lengths=lengths, ploidy=ploidy,
                 multiscale_factor=multiscale_factor, beta=beta_maps,
                 fullres_torm=fullres_torm_maps, weight=input_weight_maps))
+        the_counter += 1
 
     return counts_reformatted
 
@@ -834,7 +888,7 @@ class SparseCountsMatrix(CountsMatrix):
     """Stores data for non-zero counts bins.
     """
 
-    def __init__(self, counts, lengths, ploidy, multiscale_factor=1,
+    def __init__(self, counts, counts_mask, lengths, ploidy, multiscale_factor=1,
                  beta=1., fullres_torm=None, weight=1.):
         lengths_lowres = decrease_lengths_res(lengths, multiscale_factor)
         counts = counts.copy()
@@ -842,6 +896,7 @@ class SparseCountsMatrix(CountsMatrix):
             counts = counts.toarray()
         self.input_sum = np.nansum(counts)
         counts[np.isnan(counts)] = 0
+        counts[~counts_mask] = 0
         if np.array_equal(counts[~np.isnan(counts)],
                           counts[~np.isnan(counts)].round()):
             counts = counts.astype(
@@ -986,16 +1041,15 @@ class ZeroCountsMatrix(AtypicalCountsMatrix):
     """Stores data for zero counts bins.
     """
 
-    def __init__(self, counts, lengths, ploidy, multiscale_factor=1,
+    def __init__(self, counts, counts_mask, lengths, ploidy, multiscale_factor=1,
                  beta=1., fullres_torm=None, weight=1.):
         lengths_lowres = decrease_lengths_res(lengths, multiscale_factor)
         counts = counts.copy()
         if sparse.issparse(counts):
             counts = counts.toarray()
         self.input_sum = np.nansum(counts)
-        counts[counts != 0] = np.nan
-        dummy_counts = counts.copy() + 1
-        dummy_counts[np.isnan(dummy_counts)] = 0
+        dummy_counts = np.zeros([counts_mask.shape[0], counts_mask.shape[1]])
+        dummy_counts[counts_mask & (counts == 0)] = 1
         dummy_counts = sparse.coo_matrix(dummy_counts)
         self._row = dummy_counts.row
         self._col = dummy_counts.col

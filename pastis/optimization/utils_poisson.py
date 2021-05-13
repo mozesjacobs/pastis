@@ -7,6 +7,7 @@ import pandas as pd
 from scipy import sparse
 from distutils.util import strtobool
 
+from .correct_type import find_type_max
 
 if sys.version_info[0] < 3:
     raise Exception("Must be using Python 3")
@@ -264,7 +265,7 @@ def _intra_counts_mask(counts, lengths):
 
 
 def _intra_counts(counts, lengths, ploidy, exclude_zeros=False):
-    """Return intra-chromosomal counts.
+    """Return intra-chromosomal counts and a counts mask.
     """
 
     from .counts import _check_counts_matrix
@@ -276,7 +277,7 @@ def _intra_counts(counts, lengths, ploidy, exclude_zeros=False):
     elif not sparse.issparse(counts):
         counts = counts.tocoo()
 
-    counts = _check_counts_matrix(
+    counts, ccm_mask = _check_counts_matrix(
         counts, lengths=lengths, ploidy=ploidy, exclude_zeros=True)
 
     mask = _intra_counts_mask(counts=counts, lengths=lengths)
@@ -285,15 +286,17 @@ def _intra_counts(counts, lengths, ploidy, exclude_zeros=False):
         shape=counts.shape)
 
     if exclude_zeros:
-        return counts_new
+        return counts_new, None
     else:
-        counts_array = np.full(counts_new.shape, np.nan)
+        counts_array = np.zeros(counts_new.shape)
+        counts_mask = np.full(counts_new.shape, False)
         counts_array[counts_new.row, counts_new.col] = counts_new.data
-        return counts_array
+        counts_mask[counts_new.row, counts_new.col] = True
+        return counts_array, counts_mask
 
 
 def _inter_counts(counts, lengths, ploidy, exclude_zeros=False):
-    """Return intra-chromosomal counts.
+    """Return intra-chromosomal counts and a counts mask.
     """
 
     from .counts import _check_counts_matrix
@@ -305,7 +308,7 @@ def _inter_counts(counts, lengths, ploidy, exclude_zeros=False):
     elif not sparse.issparse(counts):
         counts = counts.tocoo()
 
-    counts = _check_counts_matrix(
+    counts, ccm_mask = _check_counts_matrix(
         counts, lengths=lengths, ploidy=ploidy, exclude_zeros=True)
 
     mask = ~_intra_counts_mask(counts=counts, lengths=lengths)
@@ -314,8 +317,10 @@ def _inter_counts(counts, lengths, ploidy, exclude_zeros=False):
         shape=counts.shape)
 
     if exclude_zeros:
-        return counts_new
+        return counts_new, None
     else:
-        counts_array = np.full(counts_new.shape, np.nan)
+        counts_array = np.zeros(counts_new.shape)
+        counts_mask = np.full(counts_new.shape, False)
         counts_array[counts_new.row, counts_new.col] = counts_new.data
-        return counts_array
+        counts_mask[counts_new.row, counts_new.col] = True
+        return counts_array, counts_mask

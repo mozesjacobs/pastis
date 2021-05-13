@@ -12,7 +12,7 @@ import autograd.numpy as ag_np
 from autograd.builtins import SequenceBox
 from autograd import grad
 from .multiscale_optimization import decrease_lengths_res
-from .counts import _update_betas_in_counts_matrices, NullCountsMatrix
+from .counts import _update_betas_in_counts_matrices, NullCountsMatrix, SparseCountsMatrix, ZeroCountsMatrix
 from .constraints import Constraints
 from .callbacks import Callback
 
@@ -48,6 +48,7 @@ def _poisson_obj_single(structures, counts, alpha, lengths, bias=None,
         multiscale_factor)
 
     lambda_intensity = ag_np.zeros(counts.nnz)
+
     for struct, gamma in zip(structures, mixture_coefs):
         dis = ag_np.sqrt((ag_np.square(
             struct[counts.row3d] - struct[counts.col3d])).sum(axis=1))

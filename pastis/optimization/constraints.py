@@ -364,12 +364,12 @@ def _mean_interhomolog_counts(counts, lengths, bias=None):
         mhs_beta = sum([c.beta for c in counts_non0])
         mhs_counts = ambiguate_counts(
             counts=counts_non0, lengths=lengths, ploidy=2,
-            exclude_zeros=True).toarray().astype(float)
+            exclude_zeros=True)[0].toarray().astype(float)
         if bias is not None:
             ambig_bias = bias.reshape(-1, 1)
             mhs_counts /= (ambig_bias * ambig_bias.T)
         mhs_counts_inter = _inter_counts(
-            mhs_counts, lengths=lengths, ploidy=2, exclude_zeros=False)
+            mhs_counts, lengths=lengths, ploidy=2, exclude_zeros=False)[0]
         mean_interhomo_counts = [np.nanmean(mhs_counts_inter) / 4]
 
     mean_interhomo_counts = np.array(mean_interhomo_counts)

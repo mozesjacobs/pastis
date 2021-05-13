@@ -4,6 +4,8 @@ from scipy import sparse
 from scipy.interpolate import interp1d
 from iced.io import load_lengths
 
+from .correct_type import find_type_max
+
 if sys.version_info[0] < 3:
     raise Exception("Must be using Python 3")
 
@@ -252,9 +254,9 @@ def decrease_counts_res(counts, multiscale_factor, lengths, ploidy):
         return counts
 
     input_is_sparse = sparse.issparse(counts)
-
+    
     counts = _check_counts_matrix(
-        counts, lengths=lengths, ploidy=ploidy, exclude_zeros=True).toarray()
+        counts, lengths=lengths, ploidy=ploidy, exclude_zeros=True)[0].toarray()
 
     lengths_lowres = decrease_lengths_res(
         lengths, multiscale_factor=multiscale_factor)
@@ -262,7 +264,7 @@ def decrease_counts_res(counts, multiscale_factor, lengths, ploidy):
         np.array(counts.shape / lengths.sum() * lengths_lowres.sum()).astype(int))
     dummy_counts_lowres = _check_counts_matrix(
         dummy_counts_lowres, lengths=lengths_lowres, ploidy=ploidy,
-        exclude_zeros=True).toarray().astype(int)
+        exclude_zeros=True)[0].toarray()
 
     dummy_counts_lowres = sparse.coo_matrix(dummy_counts_lowres)
     rows_lowres, cols_lowres = _row_and_col(dummy_counts_lowres)
@@ -280,7 +282,7 @@ def decrease_counts_res(counts, multiscale_factor, lengths, ploidy):
     if not input_is_sparse:
         counts_lowres = counts_lowres.toarray()
 
-    return counts_lowres
+    return counts_lowres.astype(find_type_max(counts_lowres))
 
 
 def _get_struct_indices(ploidy, multiscale_factor, lengths):

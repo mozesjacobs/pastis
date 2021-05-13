@@ -4,7 +4,9 @@ from scipy import sparse
 from iced.io import load_lengths
 from .hiclib import load_hiclib_counts
 from ...optimization.counts import subset_chrom
+from memory_profiler import profile
 
+from ...optimization.correct_type import find_type_max 
 
 def _get_lengths(lengths):
     """Load chromosome lengths from file, or reformat lengths object.
@@ -46,7 +48,7 @@ def _get_counts(counts, lengths):
     for f in counts:
         if isinstance(f, np.ndarray) or sparse.issparse(f):
             counts_maps = f
-        elif f.endswith(".npy"):
+        elif f.endswith(".npy") or f.endswith(".npz"):
             counts_maps = np.load(f)
         elif f.endswith(".matrix"):
             counts_maps = load_hiclib_counts(f, lengths=lengths)
@@ -54,9 +56,12 @@ def _get_counts(counts, lengths):
             raise ValueError("Counts file must end with .npy (for numpy array)"
                              " or .matrix (for hiclib / iced format)")
         if sparse.issparse(counts_maps):
-            counts_maps = counts_maps.toarray()
+            counts_maps = counts_maps.toarray().astype(find_type_max(counts_maps))
+        else:
+            counts_maps = np.array(counts_maps, dtype=find_type_max(counts_maps))
         counts_maps[np.isnan(counts_maps)] = 0
-        output.append(sparse.coo_matrix(counts_maps))
+        counts_maps = sparse.coo_matrix(counts_maps)
+        output.append(counts_maps)
     return output
 
 
